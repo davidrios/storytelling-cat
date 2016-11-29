@@ -1,10 +1,12 @@
 #!/usr/bin/env python
+import os
 import signal
+from itertools import cycle
+from os import path
 from Queue import Queue
+from subprocess import Popen, PIPE, check_output
 from threading import Thread
 from time import sleep
-from os import path
-from subprocess import Popen, PIPE
 
 commands = Queue()
 
@@ -46,50 +48,62 @@ class _GetchWindows:
         return msvcrt.getch()
 
 
+def get_child_pid(pid):
+    return int(check_output('ps -o pid --ppid {} --noheaders'.format(int(pid)), shell=True).strip())
+
+
 class Executor(Thread):
+    def __init__(self, sounds_dir):
+        super(Executor, self).__init__()
+        self.sounds_dir = sounds_dir
+
     def run(self):
-        current_sound = 0
-        player = None
+        sound_list = [i for i in os.listdir(self.sounds_dir) if i.lower().endswith('.mp3')]
+        if not sound_list:
+            print('no sounds available!')
+            return
+
+        player_pid = None
+        sounds = cycle(sound_list)
 
         while True:
             sleep(0.1)
             command = commands.get()
-            print command
+            print(command)
 
             if command == 'QUIT':
-                if player is not None:
-                    player.terminate()
+                if player_pid is not None:
+                    try:
+                        os.kill(player_pid, signal.SIGTERM)
+                    except OSError:
+                        pass
                 return
 
             if command == 'PLAY_NEXT':
-                next_sound = current_sound + 1
-                sound_file = '/usr/share/catsounds/sound{}.mp3'.format(next_sound)
-                
-                if not path.isfile(sound_file):
-                    if next_sound == 1:
-                        print 'no sounds available!'
-                        continue
+                sound_file = path.join(self.sounds_dir, next(sounds))
 
-                    current_sound = 0
-                    commands.put('PLAY_NEXT')
-                    continue
+                if player_pid is not None:
+                    try:
+                        os.kill(player_pid, signal.SIGTERM)
+                    except OSError:
+                        pass
 
-                if player is not None:
-                    player.terminate()
-
-                player = Popen(['/usr/bin/mpg123', '-C', '--ctrlusr1', 's', sound_file], stdin=PIPE)
-                current_sound = next_sound
+                shell = Popen('/usr/bin/mpg123 -C --ctrlusr1 s "{}"'.format(sound_file), shell=True)
+                player_pid = get_child_pid(shell.pid)
 
             if command == 'PLAY_PAUSE':
-                if player is None:
+                if player_pid is None:
                     commands.put('PLAY_NEXT')
                     continue
 
-                player.send_signal(signal.SIGUSR1)
+                try:
+                    os.kill(player_pid, signal.SIGUSR1)
+                except OSError:
+                    pass
 
 
-def run_keyboard():
-    executor = Executor()
+def run_keyboard(sounds_dir):
+    executor = Executor(sounds_dir)
     executor.start()
     getcher = Getch()
 
@@ -103,14 +117,14 @@ def run_keyboard():
         if key == 'n':
             commands.put('PLAY_NEXT')
 
-        if key == 'p':
+        if key == 'a':
             commands.put('PLAY_PAUSE')
 
         sleep(0.2)
 
 
-def run_raspberrypi():
-    executor = Executor()
+def run_raspberrypi(sounds_dir):
+    executor = Executor(sounds_dir)
     executor.start()
 
 
@@ -119,13 +133,14 @@ def main():
 
     parser = argparse.ArgumentParser()
     parser.add_argument('--keyboard', action='store_true')
+    parser.add_argument('--sounds-dir', default='/usr/share/catsounds')
 
     args = parser.parse_args()
 
     if args.keyboard:
-        run_keyboard()
+        run_keyboard(args.sounds_dir)
     else:
-        run_raspberrypi()
+        run_raspberrypi(args.sounds_dir)
 
 
 if __name__ == '__main__':
