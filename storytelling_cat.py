@@ -1,12 +1,13 @@
 #!/usr/bin/env python
 import os
-import signal
 from itertools import cycle
 from os import path
 from Queue import Queue
-from subprocess import Popen, PIPE, check_output
 from threading import Thread
 from time import sleep
+
+import pygame
+from RPi import GPIO
 
 commands = Queue()
 
@@ -48,10 +49,6 @@ class _GetchWindows:
         return msvcrt.getch()
 
 
-def get_child_pid(pid):
-    return int(check_output('ps -o pid --ppid {} --noheaders'.format(int(pid)), shell=True).strip())
-
-
 class Executor(Thread):
     def __init__(self, sounds_dir):
         super(Executor, self).__init__()
@@ -63,8 +60,10 @@ class Executor(Thread):
             print('no sounds available!')
             return
 
-        player_pid = None
+        pygame.init()
+        pygame.mixer.init()
         sounds = cycle(sound_list)
+        playing = False
 
         while True:
             sleep(0.1)
@@ -72,34 +71,27 @@ class Executor(Thread):
             print(command)
 
             if command == 'QUIT':
-                if player_pid is not None:
-                    try:
-                        os.kill(player_pid, signal.SIGTERM)
-                    except OSError:
-                        pass
+                pygame.mixer.quit()
+                pygame.quit()
                 return
 
             if command == 'PLAY_NEXT':
-                sound_file = path.join(self.sounds_dir, next(sounds))
-
-                if player_pid is not None:
-                    try:
-                        os.kill(player_pid, signal.SIGTERM)
-                    except OSError:
-                        pass
-
-                shell = Popen('/usr/bin/mpg123 -C --ctrlusr1 s "{}"'.format(sound_file), shell=True)
-                player_pid = get_child_pid(shell.pid)
+                pygame.mixer.music.stop()
+                pygame.mixer.music.load(path.join(self.sounds_dir, next(sounds)))
+                pygame.mixer.music.play()
+                playing = True
 
             if command == 'PLAY_PAUSE':
-                if player_pid is None:
+                if not pygame.mixer.music.get_busy():
                     commands.put('PLAY_NEXT')
                     continue
 
-                try:
-                    os.kill(player_pid, signal.SIGUSR1)
-                except OSError:
-                    pass
+                if playing:
+                    pygame.mixer.music.pause()
+                    playing = False
+                else:
+                    pygame.mixer.music.unpause()
+                    playing = True
 
 
 def run_keyboard(sounds_dir):
@@ -126,6 +118,18 @@ def run_keyboard(sounds_dir):
 def run_raspberrypi(sounds_dir):
     executor = Executor(sounds_dir)
     executor.start()
+
+    GPIO.setmode(GPIO.BCM)
+    GPIO.setup(18, GPIO.IN, pull_up_down=GPIO.PUD_UP)
+
+    last_state = True
+    while True:
+        input_state = GPIO.input(18)
+        if input_state != last_state:
+            if not last_state:
+                commands.put('PLAY_PAUSE')
+            last_state = input_state
+        sleep(0.1)
 
 
 def main():
