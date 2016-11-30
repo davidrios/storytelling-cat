@@ -4,10 +4,9 @@ from itertools import cycle
 from os import path
 from Queue import Queue
 from threading import Thread
-from time import sleep
+from time import sleep, time
 
 import pygame
-from RPi import GPIO
 
 commands = Queue()
 
@@ -96,6 +95,7 @@ class Executor(Thread):
 
 def run_keyboard(sounds_dir):
     executor = Executor(sounds_dir)
+    executor.daemon = True
     executor.start()
     getcher = Getch()
 
@@ -109,26 +109,38 @@ def run_keyboard(sounds_dir):
         if key == 'n':
             commands.put('PLAY_NEXT')
 
-        if key == 'a':
+        if key == 'p':
             commands.put('PLAY_PAUSE')
 
         sleep(0.2)
 
 
 def run_raspberrypi(sounds_dir):
+    from RPi import GPIO
+
     executor = Executor(sounds_dir)
+    executor.daemon = True
     executor.start()
 
     GPIO.setmode(GPIO.BCM)
     GPIO.setup(18, GPIO.IN, pull_up_down=GPIO.PUD_UP)
 
     last_state = True
+    last_press = time()
+
     while True:
         input_state = GPIO.input(18)
         if input_state != last_state:
-            if not last_state:
-                commands.put('PLAY_PAUSE')
+            if last_state:
+                last_press = time()
+            else:
+                if time() - last_press >= 3:
+                    commands.put('PLAY_NEXT')
+                else:
+                    commands.put('PLAY_PAUSE')
+
             last_state = input_state
+
         sleep(0.1)
 
 
